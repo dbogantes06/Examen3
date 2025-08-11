@@ -17,7 +17,7 @@ Public Class ClienteRepository
         Return dt
     End Function
 
-    ' OBTENER por Id (null-check simplificado)
+    ' OBTENER por Id
     Public Function GetById(id As Integer) As Cliente
         Using cn = DatabaseHelper.GetConnection()
             Using cmd As New SqlCommand("
@@ -59,7 +59,7 @@ Public Class ClienteRepository
         End Using
     End Function
 
-    ' UPDATE (True si tocó 1 fila)
+    ' UPDATE (True si toco 1 fila)
     Public Function Update(c As Cliente) As Boolean
         Using cn = DatabaseHelper.GetConnection()
             Using cmd As New SqlCommand("
@@ -77,7 +77,7 @@ Public Class ClienteRepository
         End Using
     End Function
 
-    ' DELETE (True si borró 1)
+    ' DELETE (True si borro 1)
     Public Function Delete(id As Integer) As Boolean
         Using cn = DatabaseHelper.GetConnection()
             Using cmd As New SqlCommand("DELETE FROM Clientes WHERE ClienteId=@Id", cn)

@@ -19,7 +19,7 @@
     <asp:ValidationSummary ID="ValidationSummary1" runat="server" HeaderText="Por favor corrige:" />
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0;border:1px solid #eee;padding:12px;border-radius:8px">
-      <!-- ID solo lectura -->
+      
       <div>
         <asp:Label AssociatedControlID="txtId" runat="server" Text="ID" /><br />
         <asp:TextBox ID="txtId" runat="server" ReadOnly="true" />

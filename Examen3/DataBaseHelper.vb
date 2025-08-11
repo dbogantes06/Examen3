@@ -5,7 +5,7 @@ Imports System.IO
 
 Public Class DatabaseHelper
 
-    ' Cambia si tu connectionString tiene otro nombre en Web.config
+
     Private Const ConnectionStringName As String = "Login"
 
 
