@@ -1,139 +1,192 @@
-﻿Imports System.Data.SqlClient
+﻿Imports System.Configuration
+Imports System.Data
+Imports System.Data.SqlClient
+Imports System.IO
 
 Public Class DatabaseHelper
-    Private ReadOnly connectionString As String = ConfigurationManager.ConnectionStrings("UsuariosDBConnectionString").ConnectionString
 
-    Public Sub New()
-        EnsureErrorLogTableExists() ' Asegúrate de que la tabla exista al crear una instancia.
+    ' Cambia si tu connectionString tiene otro nombre en Web.config
+    Private Const ConnectionStringName As String = "Login"
+
+
+    Shared Sub New()
+        Try
+            EnsureErrorLogTableExists()
+        Catch
+
+        End Try
     End Sub
 
-    ' Método para obtener la conexión
-    Public Function GetConnection() As SqlConnection
-        Dim conn As New SqlConnection(connectionString)
-        Try
-            conn.Open()
-        Catch ex As SqlException
-            Throw New Exception("Error al abrir la conexión a la base de datos: " & ex.Message)
-        End Try
-        Return conn
+    Public Shared Function GetConnection() As SqlConnection
+        Dim cs = ConfigurationManager.ConnectionStrings(ConnectionStringName)
+        If cs Is Nothing OrElse String.IsNullOrEmpty(cs.ConnectionString) Then
+            Throw New InvalidOperationException(
+                "No se encontró la cadena de conexión '" & ConnectionStringName & "' en Web.config.")
+        End If
+        Return New SqlConnection(cs.ConnectionString)
     End Function
 
-    ' Método para ejecutar un comando SQL (INSERT, UPDATE, DELETE)
-    Public Sub ExecuteNonQuery(query As String, Optional parameters As List(Of SqlParameter) = Nothing, Optional isStoredProcedure As Boolean = False)
-        If String.IsNullOrWhiteSpace(query) Then
-            Throw New ArgumentException("La consulta no puede estar vacía.")
-        End If
+    Public Shared Function ExecuteNonQuery(sql As String,
+                                           Optional parameters As IEnumerable(Of SqlParameter) = Nothing,
+                                           Optional isStoredProcedure As Boolean = False) As Boolean
+        Using cn = GetConnection()
+            Using cmd As New SqlCommand(sql, cn)
+                For Each p As SqlParameter In SafeParams(parameters)
+                    If p IsNot Nothing Then cmd.Parameters.Add(p)
+                Next
 
-        Using conn As SqlConnection = GetConnection()
-            Using cmd As New SqlCommand(query, conn)
-                If parameters IsNot Nothing Then
-                    cmd.Parameters.AddRange(parameters.ToArray())
-                End If
                 If isStoredProcedure Then
                     cmd.CommandType = CommandType.StoredProcedure
                 End If
+
                 Try
-                    cmd.ExecuteNonQuery()
+                    cn.Open()
+                    Dim affected As Integer = cmd.ExecuteNonQuery()
+                    Return affected > 0
                 Catch ex As Exception
-                    LogError(ex, query) ' Registrar el error en caso de excepción
+
+                    LogError(ex, sql)
                     Throw New Exception("Error al ejecutar el comando: " & ex.Message)
                 End Try
             End Using
         End Using
-    End Sub
+    End Function
 
-    ' Método para ejecutar una consulta SQL y devolver un DataTable
-    Public Function ExecuteQuery(query As String, Optional parameters As List(Of SqlParameter) = Nothing, Optional isStoredProcedure As Boolean = False) As DataTable
+
+    Public Shared Function ExecuteQuery(query As String,
+                                        Optional parameters As IEnumerable(Of SqlParameter) = Nothing,
+                                        Optional isStoredProcedure As Boolean = False) As DataTable
         If String.IsNullOrWhiteSpace(query) Then
             Throw New ArgumentException("La consulta no puede estar vacía.")
         End If
 
         Dim dt As New DataTable()
-        Using conn As SqlConnection = GetConnection()
-            Using cmd As New SqlCommand(query, conn)
-                If parameters IsNot Nothing Then
-                    cmd.Parameters.AddRange(parameters.ToArray())
-                End If
+        Using cn = GetConnection()
+            Using cmd As New SqlCommand(query, cn)
+                For Each p As SqlParameter In SafeParams(parameters)
+                    If p IsNot Nothing Then cmd.Parameters.Add(p)
+                Next
+
                 If isStoredProcedure Then
                     cmd.CommandType = CommandType.StoredProcedure
                 End If
+
                 Try
-                    Using adapter As New SqlDataAdapter(cmd)
-                        adapter.Fill(dt)
+                    cn.Open()
+                    Using da As New SqlDataAdapter(cmd)
+                        da.Fill(dt)
                     End Using
                 Catch ex As Exception
-                    LogError(ex, query) ' Registrar el error en caso de excepción
+
+                    LogError(ex, query)
                     Throw New Exception("Error al ejecutar la consulta: " & ex.Message)
                 End Try
             End Using
         End Using
+
         Return dt
     End Function
 
-    ' Método para asegurar que la tabla ErrorLog existe
-    Private Sub EnsureErrorLogTableExists()
-        Dim query As String = "
-            IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'ErrorLog')
-            BEGIN
-                CREATE TABLE ErrorLog (
-                    Id INT IDENTITY(1,1) PRIMARY KEY,
-                    ErrorMessage NVARCHAR(4000),
-                    ErrorSeverity INT,
-                    ErrorState INT,
-                    ErrorProcedure NVARCHAR(200),
-                    ErrorLine INT,
-                    ErrorDateTime DATETIME DEFAULT GETDATE()
-                )
-            END"
+    Private Shared Sub EnsureErrorLogTableExists()
+        Dim sql As String =
+"IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ErrorLog')
+BEGIN
+    CREATE TABLE ErrorLog (
+        Id INT IDENTITY(1,1) PRIMARY KEY,
+        ErrorMessage NVARCHAR(4000),
+        ErrorSeverity INT,
+        ErrorState INT,
+        ErrorProcedure NVARCHAR(200),
+        ErrorLine INT,
+        ErrorDateTime DATETIME DEFAULT GETDATE()
+    )
+END"
+        Try
+            Using cn = GetConnection()
+                Using cmd As New SqlCommand(sql, cn)
+                    cn.Open()
+                    cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        Catch
 
-        ExecuteNonQuery(query)
+        End Try
     End Sub
 
-    Private Sub LogErrorToFile(message As String)
-        Dim path As String = "C:\Logs\error_log.txt"
-        IO.File.AppendAllText(path, $"{DateTime.Now}: {message}{Environment.NewLine}")
+    Private Shared Sub LogErrorToFile(message As String)
+        Try
+            Dim logPath As String = "C:\Logs\error_log.txt"
+            Dim dir = Path.GetDirectoryName(logPath)
+            If Not String.IsNullOrEmpty(dir) AndAlso Not Directory.Exists(dir) Then
+                Directory.CreateDirectory(dir)
+            End If
+            File.AppendAllText(logPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {message}{Environment.NewLine}")
+        Catch
+
+        End Try
     End Sub
 
+    Private Shared Sub LogError(ex As Exception, Optional query As String = "")
+        Dim fullMessage As String =
+            "Message: " & ex.Message & Environment.NewLine &
+            "StackTrace: " & If(ex.StackTrace, "") & Environment.NewLine &
+            "InnerException: " & If(If(ex.InnerException IsNot Nothing, ex.InnerException.Message, Nothing), "N/A") & Environment.NewLine &
+            "Query: " & query
 
-    ' Método para registrar errores en una tabla de auditoría.
-    Private Sub LogError(ex As Exception, Optional query As String = "")
-        Dim fullMessage As String = $"Message: {ex.Message}" & Environment.NewLine &
-                                    $"StackTrace: {ex.StackTrace}" & Environment.NewLine &
-                                    $"InnerException: {If(ex.InnerException IsNot Nothing, ex.InnerException.Message, "N/A")}" & Environment.NewLine &
-                                    $"Query: {query}"
-
-        ' Escapar comillas simples para evitar errores de SQL
-        Dim errorMessage As String = fullMessage.Replace("'", "''")
         Dim severity As Integer = 16
         Dim state As Integer = 1
-        Dim procedureName As String = If(ex.TargetSite IsNot Nothing, ex.TargetSite.Name, DBNull.Value.ToString())
+        Dim procedureName As String = If(ex.TargetSite IsNot Nothing, ex.TargetSite.Name, "")
         Dim lineNumber As Integer = 0
 
-        ' Intentar extraer el número de línea si está disponible en el stack trace
-        If ex.StackTrace IsNot Nothing AndAlso ex.StackTrace.Contains(":line ") Then
-            Integer.TryParse(ex.StackTrace.Split(":line ").Last().Split(" "c)(0), lineNumber)
+
+        If ex.StackTrace IsNot Nothing Then
+            Dim marker As String = ":line "
+            Dim idx As Integer = ex.StackTrace.LastIndexOf(marker, StringComparison.Ordinal)
+            If idx >= 0 Then
+                Dim after As String = ex.StackTrace.Substring(idx + marker.Length)
+                Dim digits As String = ""
+                For Each ch As Char In after
+                    If Char.IsDigit(ch) Then
+                        digits &= ch
+                    Else
+                        Exit For
+                    End If
+                Next
+                Integer.TryParse(digits, lineNumber)
+            End If
         End If
 
-        Dim logQuery As String = "
-        INSERT INTO ErrorLog (ErrorMessage, ErrorSeverity, ErrorState, ErrorProcedure, ErrorLine, ErrorDateTime) 
-        VALUES (@ErrorMessage, @ErrorSeverity, @ErrorState, @ErrorProcedure, @ErrorLine, GETDATE())"
-
-        Dim parameters As New List(Of SqlParameter) From {
-            New SqlParameter("@ErrorMessage", errorMessage),
-            New SqlParameter("@ErrorSeverity", severity),
-            New SqlParameter("@ErrorState", state),
-            New SqlParameter("@ErrorProcedure", procedureName),
-            New SqlParameter("@ErrorLine", lineNumber)
-        }
-
         Try
-            ExecuteNonQuery(logQuery, parameters)
-        Catch logEx As Exception
-            ' Fallback: guardar en archivo si falla el log a la base de datos
+            Using cn = GetConnection()
+                Using cmd As New SqlCommand("
+INSERT INTO ErrorLog (ErrorMessage, ErrorSeverity, ErrorState, ErrorProcedure, ErrorLine, ErrorDateTime)
+VALUES (@ErrorMessage, @ErrorSeverity, @ErrorState, @ErrorProcedure, @ErrorLine, GETDATE())", cn)
+
+                    cmd.Parameters.AddWithValue("@ErrorMessage", fullMessage)
+                    cmd.Parameters.AddWithValue("@ErrorSeverity", severity)
+                    cmd.Parameters.AddWithValue("@ErrorState", state)
+                    cmd.Parameters.AddWithValue("@ErrorProcedure", procedureName)
+                    cmd.Parameters.AddWithValue("@ErrorLine", lineNumber)
+
+                    cn.Open()
+                    cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        Catch
+
             LogErrorToFile(fullMessage)
         End Try
     End Sub
-    Public Function CreateParameter(name As String, value As Object) As SqlParameter
+
+
+    Private Shared Function SafeParams(parameters As IEnumerable(Of SqlParameter)) As IEnumerable(Of SqlParameter)
+        If parameters Is Nothing Then
+            Return New List(Of SqlParameter)()
+        End If
+        Return parameters
+    End Function
+
+    Public Shared Function CreateParameter(name As String, value As Object) As SqlParameter
         Return New SqlParameter(name, If(value IsNot Nothing, value, DBNull.Value))
     End Function
 
